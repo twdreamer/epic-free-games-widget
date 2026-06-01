@@ -19,6 +19,10 @@ export const className = `
 
 const shellEscape = (value) => `'${String(value).replace(/'/g, "'\\''")}'`
 const openUrl = (url) => url && run(`/usr/bin/open ${shellEscape(url)}`)
+const claimKey = (game) => `epic-free-games-widget:claimed:${game.epicUrl}`
+const isClaimed = (game) => window.localStorage.getItem(claimKey(game)) === "true"
+const saveClaim = (game, claimed) =>
+  window.localStorage.setItem(claimKey(game), String(claimed))
 
 const panelStyle = {
   padding: "12px 14px 13px",
@@ -64,7 +68,39 @@ const SteamScore = ({ steam }) => (
   </button>
 )
 
-const Game = ({ game, current }) => (
+const ClaimButton = ({ game, claimed, dispatch }) => {
+  const toggle = (event) => {
+    event.stopPropagation()
+    const nextClaimed = !claimed
+    saveClaim(game, nextClaimed)
+    dispatch({ type: "CLAIM_TOGGLED", game, claimed: nextClaimed })
+    if (nextClaimed) openUrl(game.epicUrl)
+  }
+
+  return (
+    <button
+      onClick={toggle}
+      title={claimed ? "點擊可取消已領取標記" : "開啟 Epic 領取頁並標記為已領取"}
+      style={{
+        cursor: "pointer",
+        border: claimed
+          ? "1px solid rgba(109, 226, 149, 0.38)"
+          : "1px solid rgba(255, 196, 94, 0.4)",
+        background: claimed ? "rgba(46, 160, 91, 0.22)" : "rgba(212, 142, 34, 0.2)",
+        color: claimed ? "#a8f0bd" : "#ffd98c",
+        borderRadius: 8,
+        padding: "3px 7px",
+        fontSize: 11,
+        fontWeight: 750,
+        whiteSpace: "nowrap",
+      }}
+    >
+      {claimed ? "已領取 ✓" : "領取"}
+    </button>
+  )
+}
+
+const Game = ({ game, current, claimed, dispatch }) => (
   <div
     onClick={() => openUrl(game.epicUrl)}
     style={{
@@ -100,7 +136,12 @@ const Game = ({ game, current }) => (
         {current ? `免費至 ${game.end}` : `${game.start} 開放領取`}
       </div>
     </div>
-    {current && game.steam ? <SteamScore steam={game.steam} /> : null}
+    {current ? (
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <ClaimButton game={game} claimed={claimed} dispatch={dispatch} />
+        {game.steam ? <SteamScore steam={game.steam} /> : null}
+      </div>
+    ) : null}
   </div>
 )
 
@@ -127,7 +168,20 @@ const Header = ({ updatedAt }) => (
   </div>
 )
 
-export const render = ({ output, error }) => {
+export const updateState = (event, previousState) => {
+  if (event.type === "CLAIM_TOGGLED") {
+    return {
+      ...previousState,
+      claimed: { ...(previousState.claimed || {}), [claimKey(event.game)]: event.claimed },
+    }
+  }
+
+  return { ...previousState, output: event.output, error: event.error }
+}
+
+export const initialState = { output: "", error: null, claimed: {} }
+
+export const render = ({ output, error, claimed = {} }, dispatch) => {
   let data = {}
   try {
     data = output ? JSON.parse(output) : {}
@@ -157,7 +211,15 @@ export const render = ({ output, error }) => {
       <Header updatedAt={data.updatedAt} />
       <SectionTitle>目前免費</SectionTitle>
       {current.length ? (
-        current.map((game) => <Game key={`current-${game.title}`} game={game} current />)
+        current.map((game) => (
+          <Game
+            key={`current-${game.title}`}
+            game={game}
+            current
+            claimed={claimed[claimKey(game)] == null ? isClaimed(game) : claimed[claimKey(game)]}
+            dispatch={dispatch}
+          />
+        ))
       ) : (
         <div style={{ opacity: 0.62 }}>目前沒有免費項目</div>
       )}
