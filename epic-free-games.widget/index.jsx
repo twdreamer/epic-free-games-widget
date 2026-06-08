@@ -2,9 +2,22 @@ import { run } from "uebersicht"
 
 export const refreshFrequency = 1000 * 60 * 60 * 6
 
-export const command = `
+const epicCommand = `
 cd "$HOME/Library/Application Support/Übersicht/widgets/epic-free-games.widget" && /usr/bin/python3 epic_games.py
 `
+
+const refreshEpic = async (dispatch) => {
+  dispatch({ type: "REFRESH_STARTED" })
+
+  try {
+    const output = await run(epicCommand)
+    dispatch({ type: "OUTPUT_UPDATED", output, error: null })
+  } catch (error) {
+    dispatch({ type: "OUTPUT_UPDATED", output: "", error: String(error) })
+  }
+}
+
+export const command = refreshEpic
 
 export const className = `
   top: 185px;
@@ -145,30 +158,45 @@ const Game = ({ game, current, claimed, dispatch }) => (
   </div>
 )
 
-const Header = ({ updatedAt }) => (
+const Header = ({ updatedAt, isLoading, dispatch }) => (
   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
     <div>
       <div style={{ fontWeight: 850, fontSize: 14 }}>Epic Games 免費遊戲</div>
       <div style={{ opacity: 0.68, fontSize: 11 }}>每 6 小時更新｜{updatedAt || "--:--"}</div>
     </div>
     <button
-      onClick={() => window.location.reload()}
+      onClick={() => refreshEpic(dispatch)}
+      disabled={isLoading}
       style={{
-        cursor: "pointer",
+        cursor: isLoading ? "default" : "pointer",
         border: "1px solid rgba(255,255,255,0.25)",
         background: "rgba(255,255,255,0.12)",
         color: "white",
+        opacity: isLoading ? 0.62 : 1,
         borderRadius: 8,
         padding: "4px 8px",
         fontSize: 11,
       }}
     >
-      更新
+      {isLoading ? "更新中" : "更新"}
     </button>
   </div>
 )
 
 export const updateState = (event, previousState) => {
+  if (event.type === "REFRESH_STARTED") {
+    return { ...previousState, isLoading: true }
+  }
+
+  if (event.type === "OUTPUT_UPDATED") {
+    return {
+      ...previousState,
+      output: event.output,
+      error: event.error,
+      isLoading: false,
+    }
+  }
+
   if (event.type === "CLAIM_TOGGLED") {
     return {
       ...previousState,
@@ -176,12 +204,12 @@ export const updateState = (event, previousState) => {
     }
   }
 
-  return { ...previousState, output: event.output, error: event.error }
+  return { ...previousState, output: event.output, error: event.error, isLoading: false }
 }
 
-export const initialState = { output: "", error: null, claimed: {} }
+export const initialState = { output: "", error: null, claimed: {}, isLoading: false }
 
-export const render = ({ output, error, claimed = {} }, dispatch) => {
+export const render = ({ output, error, claimed = {}, isLoading }, dispatch) => {
   let data = {}
   try {
     data = output ? JSON.parse(output) : {}
@@ -192,7 +220,7 @@ export const render = ({ output, error, claimed = {} }, dispatch) => {
   if (error || data.error) {
     return (
       <div style={panelStyle}>
-        <Header />
+        <Header isLoading={isLoading} dispatch={dispatch} />
         <div style={{ marginTop: 10, color: "#ff9da4", fontWeight: 750 }}>
           無法取得 Epic 免費遊戲
         </div>
@@ -208,7 +236,7 @@ export const render = ({ output, error, claimed = {} }, dispatch) => {
 
   return (
     <div style={panelStyle}>
-      <Header updatedAt={data.updatedAt} />
+      <Header updatedAt={data.updatedAt} isLoading={isLoading} dispatch={dispatch} />
       <SectionTitle>目前免費</SectionTitle>
       {current.length ? (
         current.map((game) => (
