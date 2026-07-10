@@ -158,11 +158,14 @@ const Game = ({ game, current, claimed, dispatch }) => (
   </div>
 )
 
-const Header = ({ updatedAt, isLoading, dispatch }) => (
+const Header = ({ data = {}, isLoading, dispatch }) => (
   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
     <div>
       <div style={{ fontWeight: 850, fontSize: 14 }}>Epic Games 免費遊戲</div>
-      <div style={{ opacity: 0.68, fontSize: 11 }}>每 6 小時更新｜{updatedAt || "--:--"}</div>
+      <div style={{ opacity: 0.68, fontSize: 11 }}>
+        每 6 小時更新｜{data.updatedAt || "--:--"}
+        {data.cached ? "｜快取資料" : ""}
+      </div>
     </div>
     <button
       onClick={() => refreshEpic(dispatch)}
@@ -236,7 +239,24 @@ export const render = ({ output, error, claimed = {}, isLoading }, dispatch) => 
 
   return (
     <div style={panelStyle}>
-      <Header updatedAt={data.updatedAt} isLoading={isLoading} dispatch={dispatch} />
+      <Header data={data} isLoading={isLoading} dispatch={dispatch} />
+      {data.cached ? (
+        <div
+          title={data.cacheReason || ""}
+          style={{
+            marginTop: 9,
+            padding: "6px 8px",
+            border: "1px solid rgba(255, 196, 94, 0.28)",
+            background: "rgba(212, 142, 34, 0.14)",
+            color: "#ffd98c",
+            borderRadius: 8,
+            fontSize: 11,
+            fontWeight: 700,
+          }}
+        >
+          使用最後一次成功結果
+        </div>
+      ) : null}
       <SectionTitle>目前免費</SectionTitle>
       {current.length ? (
         current.map((game) => (

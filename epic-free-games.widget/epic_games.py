@@ -4,6 +4,7 @@ import re
 import sys
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
+from pathlib import Path
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
@@ -15,6 +16,7 @@ EPIC_URL = (
 STEAM_SEARCH_URL = "https://store.steampowered.com/api/storesearch/"
 STEAM_REVIEWS_URL = "https://store.steampowered.com/appreviews/{appid}"
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X) EpicFreeGamesWidget/1.0"
+CACHE_PATH = Path(__file__).with_name("epic_games_cache.json")
 
 
 def fetch_json(url, params=None):
@@ -23,6 +25,21 @@ def fetch_json(url, params=None):
     request = Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
     with urlopen(request, timeout=15) as response:
         return json.load(response)
+
+
+def load_cache():
+    if not CACHE_PATH.exists():
+        return None
+    with CACHE_PATH.open(encoding="utf-8") as cache_file:
+        return json.load(cache_file)
+
+
+def save_cache(payload):
+    temp_path = CACHE_PATH.with_suffix(".json.tmp")
+    with temp_path.open("w", encoding="utf-8") as cache_file:
+        json.dump(payload, cache_file, ensure_ascii=False, indent=2)
+        cache_file.write("\n")
+    temp_path.replace(CACHE_PATH)
 
 
 def normalize(value):
@@ -121,7 +138,7 @@ def game_data(element, offer, include_steam=False):
     return result
 
 
-def main():
+def fetch_games():
     payload = fetch_json(EPIC_URL)
     elements = payload["data"]["Catalog"]["searchStore"]["elements"]
     current = []
@@ -137,21 +154,32 @@ def main():
         if offer and offer.get("discountSetting", {}).get("discountPercentage") == 0:
             upcoming.append(game_data(element, offer))
 
-    print(
-        json.dumps(
-            {
-                "updatedAt": datetime.now(timezone.utc).astimezone().strftime("%H:%M"),
-                "current": current,
-                "upcoming": upcoming,
-            },
-            ensure_ascii=False,
-        )
-    )
+    now = datetime.now(timezone.utc).astimezone()
+    return {
+        "updatedAt": now.strftime("%H:%M"),
+        "updatedDate": now.strftime("%Y-%m-%d"),
+        "cached": False,
+        "current": current,
+        "upcoming": upcoming,
+    }
+
+
+def main():
+    payload = fetch_games()
+    save_cache(payload)
+    print(json.dumps(payload, ensure_ascii=False))
 
 
 if __name__ == "__main__":
     try:
         main()
     except Exception as error:
+        cache = load_cache()
+        if cache:
+            cache["cached"] = True
+            cache["cacheReason"] = str(error)
+            print(json.dumps(cache, ensure_ascii=False))
+            sys.exit(0)
+
         print(json.dumps({"error": str(error)}, ensure_ascii=False))
         sys.exit(1)
