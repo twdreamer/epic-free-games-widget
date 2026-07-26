@@ -17,6 +17,10 @@ STEAM_SEARCH_URL = "https://store.steampowered.com/api/storesearch/"
 STEAM_REVIEWS_URL = "https://store.steampowered.com/appreviews/{appid}"
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X) EpicFreeGamesWidget/1.0"
 CACHE_PATH = Path(__file__).with_name("epic_games_cache.json")
+STEAM_EXTRA_PATTERN = re.compile(
+    r"\b(demo|soundtrack|ost|artbook|playtest|beta|dlc)\b|試玩|原聲|美術|設定集",
+    re.IGNORECASE,
+)
 
 
 def fetch_json(url, params=None):
@@ -46,26 +50,47 @@ def normalize(value):
     return re.sub(r"[^a-z0-9]+", "", value.lower())
 
 
+def search_title(value):
+    title = value.strip()
+    quoted = re.fullmatch(r"[《「『](.+)[》」』]", title)
+    if quoted:
+        title = quoted.group(1)
+    return title.strip()
+
+
 def steam_search_url(title):
-    return f"https://store.steampowered.com/search/?term={quote(title)}"
+    return f"https://store.steampowered.com/search/?term={quote(search_title(title))}"
+
+
+def is_steam_extra(item):
+    name = item.get("name") or ""
+    return item.get("type") != "app" or bool(STEAM_EXTRA_PATTERN.search(name))
 
 
 def find_steam_game(title):
     fallback = {"url": steam_search_url(title), "rating": None, "reviews": None}
     try:
-        data = fetch_json(STEAM_SEARCH_URL, {"term": title, "l": "tchinese", "cc": "TW"})
+        term = search_title(title)
+        data = fetch_json(STEAM_SEARCH_URL, {"term": term, "l": "tchinese", "cc": "TW"})
         items = data.get("items") or []
         if not items:
             return fallback
 
-        wanted = normalize(title)
+        viable_items = [item for item in items[:10] if not is_steam_extra(item)]
+        if not viable_items:
+            return fallback
+
+        wanted = normalize(term)
         best = max(
-            items[:10],
+            viable_items,
             key=lambda item: SequenceMatcher(None, wanted, normalize(item.get("name", ""))).ratio(),
         )
         ratio = SequenceMatcher(None, wanted, normalize(best.get("name", ""))).ratio()
         if ratio < 0.72:
-            return fallback
+            top = viable_items[0]
+            if top != items[0] or not top.get("price"):
+                return fallback
+            best = top
 
         appid = best["id"]
         reviews = fetch_json(
@@ -92,12 +117,13 @@ def offer_groups(element):
     }
 
 
-def first_offer(groups):
+def free_offers(groups):
+    offers = []
     for group in groups:
-        offers = group.get("promotionalOffers") or []
-        if offers:
-            return offers[0]
-    return None
+        for offer in group.get("promotionalOffers") or []:
+            if offer.get("discountSetting", {}).get("discountPercentage") == 0:
+                offers.append(offer)
+    return offers
 
 
 def epic_url(element):
@@ -146,12 +172,14 @@ def fetch_games():
 
     for element in elements:
         groups = offer_groups(element)
-        offer = first_offer(groups["current"])
-        if offer and offer.get("discountSetting", {}).get("discountPercentage") == 0:
+        offers = free_offers(groups["current"])
+        if offers:
+            offer = offers[0]
             current.append(game_data(element, offer, include_steam=True))
 
-        offer = first_offer(groups["upcoming"])
-        if offer and offer.get("discountSetting", {}).get("discountPercentage") == 0:
+        offers = free_offers(groups["upcoming"])
+        if offers:
+            offer = offers[0]
             upcoming.append(game_data(element, offer))
 
     now = datetime.now(timezone.utc).astimezone()
