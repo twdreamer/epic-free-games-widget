@@ -17,7 +17,7 @@ const refreshEpic = async (dispatch) => {
   }
 }
 
-export const command = refreshEpic
+export const command = epicCommand
 
 export const className = `
   top: 185px;
@@ -213,6 +213,17 @@ export const updateState = (event, previousState) => {
 export const initialState = { output: "", error: null, claimed: {}, isLoading: false }
 
 export const render = ({ output, error, claimed = {}, isLoading }, dispatch) => {
+  if (!output && !error) {
+    return (
+      <div style={panelStyle}>
+        <Header isLoading={isLoading} dispatch={dispatch} />
+        <div style={{ marginTop: 10, opacity: 0.62, fontWeight: 750 }}>
+          讀取最後一次結果中
+        </div>
+      </div>
+    )
+  }
+
   let data = {}
   try {
     data = output ? JSON.parse(output) : {}
