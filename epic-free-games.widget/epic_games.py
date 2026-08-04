@@ -50,6 +50,7 @@ def load_cache():
     if not payload:
         delete_cache()
         return None
+    normalize_cached_images(payload)
     prune_image_cache(payload)
     save_cache(payload)
     return payload
@@ -219,6 +220,21 @@ def image_cache_path(url):
     return IMAGE_CACHE_DIR / f"{digest}{suffix}"
 
 
+def local_image_src(path):
+    widget_dir = Path(__file__).parent.name
+    return f"{widget_dir}/{IMAGE_CACHE_DIR.name}/{path.name}"
+
+
+def normalize_cached_images(payload):
+    for game in all_games(payload):
+        image_cache_path = game.get("imageCachePath")
+        if not image_cache_path:
+            continue
+        path = Path(image_cache_path)
+        if path.exists() and path.stat().st_size > 0:
+            game["image"] = local_image_src(path)
+
+
 def cache_game_image(game):
     image = game.get("image")
     if not image or image.startswith("file://"):
@@ -233,12 +249,12 @@ def cache_game_image(game):
             temp_path.replace(path)
 
         game["remoteImage"] = image
-        game["image"] = path.resolve().as_uri()
+        game["image"] = local_image_src(path)
         game["imageCachePath"] = str(path)
     except Exception:
         if path.exists() and path.stat().st_size > 0:
             game["remoteImage"] = image
-            game["image"] = path.resolve().as_uri()
+            game["image"] = local_image_src(path)
             game["imageCachePath"] = str(path)
 
 
