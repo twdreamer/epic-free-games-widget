@@ -3,3 +3,4 @@ __pycache__/
 .DS_Store
 epic_games_cache.json
 epic_games_cache.json.tmp
+image_cache/

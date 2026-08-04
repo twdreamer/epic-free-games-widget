@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 import json
 import re
+import shutil
 import sys
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
+from hashlib import sha256
 from pathlib import Path
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlparse
 from urllib.request import Request, urlopen
 
 
@@ -17,6 +19,8 @@ STEAM_SEARCH_URL = "https://store.steampowered.com/api/storesearch/"
 STEAM_REVIEWS_URL = "https://store.steampowered.com/appreviews/{appid}"
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X) EpicFreeGamesWidget/1.0"
 CACHE_PATH = Path(__file__).with_name("epic_games_cache.json")
+IMAGE_CACHE_DIR = Path(__file__).with_name("image_cache")
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 STEAM_EXTRA_PATTERN = re.compile(
     r"\b(demo|soundtrack|ost|artbook|playtest|beta|dlc)\b|試玩|原聲|美術|設定集",
     re.IGNORECASE,
@@ -31,11 +35,24 @@ def fetch_json(url, params=None):
         return json.load(response)
 
 
+def fetch_bytes(url):
+    request = Request(url, headers={"User-Agent": USER_AGENT, "Accept": "image/*,*/*;q=0.8"})
+    with urlopen(request, timeout=20) as response:
+        return response.read()
+
+
 def load_cache():
     if not CACHE_PATH.exists():
         return None
     with CACHE_PATH.open(encoding="utf-8") as cache_file:
-        return json.load(cache_file)
+        payload = json.load(cache_file)
+    payload = active_cached_payload(payload)
+    if not payload:
+        delete_cache()
+        return None
+    prune_image_cache(payload)
+    save_cache(payload)
+    return payload
 
 
 def save_cache(payload):
@@ -44,6 +61,57 @@ def save_cache(payload):
         json.dump(payload, cache_file, ensure_ascii=False, indent=2)
         cache_file.write("\n")
     temp_path.replace(CACHE_PATH)
+
+
+def delete_cache():
+    for path in (CACHE_PATH, CACHE_PATH.with_suffix(".json.tmp")):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+    shutil.rmtree(IMAGE_CACHE_DIR, ignore_errors=True)
+
+
+def all_games(payload):
+    return (payload.get("current") or []) + (payload.get("upcoming") or [])
+
+
+def parse_iso(value):
+    if not value:
+        return None
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def active_cached_payload(payload):
+    now = datetime.now(timezone.utc)
+    current = []
+    upcoming = []
+
+    def collect(game, original_section):
+        start = parse_iso(game.get("startIso"))
+        end = parse_iso(game.get("endIso"))
+        if end and end <= now:
+            return
+        if start and start <= now:
+            current.append(game)
+            return
+        if start:
+            upcoming.append(game)
+            return
+        if original_section == "current":
+            current.append(game)
+        else:
+            upcoming.append(game)
+
+    for game in payload.get("current") or []:
+        collect(game, "current")
+    for game in payload.get("upcoming") or []:
+        collect(game, "upcoming")
+
+    if not current and not upcoming:
+        return None
+
+    return {**payload, "current": current, "upcoming": upcoming}
 
 
 def normalize(value):
@@ -143,6 +211,56 @@ def image_url(element):
     return None
 
 
+def image_cache_path(url):
+    suffix = Path(urlparse(url).path).suffix.lower()
+    if suffix not in IMAGE_EXTENSIONS:
+        suffix = ".jpg"
+    digest = sha256(url.encode("utf-8")).hexdigest()[:20]
+    return IMAGE_CACHE_DIR / f"{digest}{suffix}"
+
+
+def cache_game_image(game):
+    image = game.get("image")
+    if not image or image.startswith("file://"):
+        return
+
+    path = image_cache_path(image)
+    try:
+        if not path.exists() or path.stat().st_size == 0:
+            IMAGE_CACHE_DIR.mkdir(exist_ok=True)
+            temp_path = path.with_suffix(path.suffix + ".tmp")
+            temp_path.write_bytes(fetch_bytes(image))
+            temp_path.replace(path)
+
+        game["remoteImage"] = image
+        game["image"] = path.resolve().as_uri()
+        game["imageCachePath"] = str(path)
+    except Exception:
+        if path.exists() and path.stat().st_size > 0:
+            game["remoteImage"] = image
+            game["image"] = path.resolve().as_uri()
+            game["imageCachePath"] = str(path)
+
+
+def cache_images(payload):
+    for game in all_games(payload):
+        cache_game_image(game)
+
+    prune_image_cache(payload)
+
+
+def prune_image_cache(payload):
+    referenced_paths = {
+        Path(game["imageCachePath"]).resolve()
+        for game in all_games(payload)
+        if game.get("imageCachePath")
+    }
+    if IMAGE_CACHE_DIR.exists():
+        for path in IMAGE_CACHE_DIR.iterdir():
+            if path.is_file() and path.resolve() not in referenced_paths:
+                path.unlink()
+
+
 def display_time(value):
     if not value:
         return None
@@ -158,6 +276,8 @@ def game_data(element, offer, include_steam=False):
         "image": image_url(element),
         "start": display_time(offer.get("startDate")),
         "end": display_time(offer.get("endDate")),
+        "startIso": offer.get("startDate"),
+        "endIso": offer.get("endDate"),
     }
     if include_steam:
         result["steam"] = find_steam_game(result["title"])
@@ -194,6 +314,7 @@ def fetch_games():
 
 def main():
     payload = fetch_games()
+    cache_images(payload)
     save_cache(payload)
     print(json.dumps(payload, ensure_ascii=False))
 

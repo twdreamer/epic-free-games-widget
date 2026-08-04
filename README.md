@@ -28,3 +28,5 @@ Ubersicht 會自動載入 widget。看板預設位於右上角，排列在 RSI w
 
 每次成功更新時，widget 會在資料夾內寫入 `epic_games_cache.json`。
 若 Epic 或 Steam 暫時無法連線，widget 會顯示最後一次成功結果並標示為快取資料。
+遊戲圖片也會下載到本機 `image_cache/`，避免 Epic CDN 圖片暫時失效時破圖。
+當快取內所有遊戲的免費週期都結束後，widget 會刪除 JSON 快取和本機圖片。
