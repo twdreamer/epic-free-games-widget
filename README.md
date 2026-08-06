@@ -7,13 +7,15 @@ macOS [Ubersicht](https://tracesof.net/uebersicht/) widget，顯示 Epic Games S
 - Steam 玩家好評率與可點擊連結
 - 下個週期即將開放領取的遊戲
 - 網路中斷時顯示最後一次成功抓取的結果
+- 可縮小成只顯示標題，並記住上次的顯示狀態
 
 ## 安裝
 
-將 `epic-free-games.widget` 複製到 Ubersicht widgets 目錄：
+將專案直接 clone 到 Ubersicht widgets 目錄：
 
 ```bash
-cp -R epic-free-games.widget "$HOME/Library/Application Support/Übersicht/widgets/"
+git clone https://github.com/twdreamer/epic-free-games-widget.git \
+  "$HOME/Library/Application Support/Übersicht/widgets/epic-free-games.widget"
 ```
 
 Ubersicht 會自動載入 widget。看板預設位於右上角，排列在 RSI widget 下方。

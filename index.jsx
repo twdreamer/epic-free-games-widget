@@ -5,6 +5,17 @@ export const refreshFrequency = 1000 * 60 * 60 * 6
 const epicCommand = `
 cd "$HOME/Library/Application Support/Übersicht/widgets/epic-free-games.widget" && /usr/bin/python3 epic_games.py
 `
+const collapseKey = "epic-free-games-widget:collapsed"
+
+const loadCollapsed = () => window.localStorage.getItem(collapseKey) === "true"
+const saveCollapsed = (isCollapsed) =>
+  window.localStorage.setItem(collapseKey, String(isCollapsed))
+
+const toggleCollapsed = (isCollapsed, dispatch) => {
+  const nextCollapsed = !isCollapsed
+  saveCollapsed(nextCollapsed)
+  dispatch({ type: "COLLAPSE_TOGGLED", isCollapsed: nextCollapsed })
+}
 
 const refreshEpic = async (dispatch) => {
   dispatch({ type: "REFRESH_STARTED" })
@@ -21,8 +32,8 @@ export const command = epicCommand
 
 export const className = `
   top: 185px;
-  right: 24px;
-  width: 456px;
+  left: calc(100% - 480px);
+  width: fit-content;
   color: white;
   font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
   font-size: 13px;
@@ -37,13 +48,15 @@ const isClaimed = (game) => window.localStorage.getItem(claimKey(game)) === "tru
 const saveClaim = (game, claimed) =>
   window.localStorage.setItem(claimKey(game), String(claimed))
 
-const panelStyle = {
+const panelStyle = (isCollapsed = false) => ({
+  width: isCollapsed ? "fit-content" : 456,
+  boxSizing: "border-box",
   padding: "12px 14px 13px",
   background: "rgba(8, 12, 20, 0.84)",
   borderRadius: 14,
   boxShadow: "0 10px 28px rgba(0, 0, 0, 0.28)",
   backdropFilter: "blur(10px)",
-}
+})
 
 const SectionTitle = ({ children }) => (
   <div
@@ -158,31 +171,69 @@ const Game = ({ game, current, claimed, dispatch }) => (
   </div>
 )
 
-const Header = ({ data = {}, isLoading, dispatch }) => (
-  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-    <div>
-      <div style={{ fontWeight: 850, fontSize: 14 }}>Epic Games 免費遊戲</div>
-      <div style={{ opacity: 0.68, fontSize: 11 }}>
-        每 6 小時更新｜{data.updatedAt || "--:--"}
-        {data.cached ? "｜快取資料" : ""}
-      </div>
-    </div>
-    <button
-      onClick={() => refreshEpic(dispatch)}
-      disabled={isLoading}
-      style={{
-        cursor: isLoading ? "default" : "pointer",
-        border: "1px solid rgba(255,255,255,0.25)",
-        background: "rgba(255,255,255,0.12)",
-        color: "white",
-        opacity: isLoading ? 0.62 : 1,
-        borderRadius: 8,
-        padding: "4px 8px",
-        fontSize: 11,
-      }}
+const Header = ({ data = {}, isCollapsed, isLoading, dispatch }) => (
+  <div
+    style={{
+      display: "flex",
+      justifyContent: isCollapsed ? "flex-start" : "space-between",
+      alignItems: "center",
+      gap: isCollapsed ? 8 : 0,
+    }}
+  >
+    <div
+      onClick={
+        isCollapsed ? () => toggleCollapsed(isCollapsed, dispatch) : undefined
+      }
+      title={isCollapsed ? "展開 Epic Games 免費遊戲" : undefined}
+      style={{ cursor: isCollapsed ? "pointer" : "default" }}
     >
-      {isLoading ? "更新中" : "更新"}
-    </button>
+      <div style={{ fontWeight: 850, fontSize: 14 }}>Epic Games 免費遊戲</div>
+      {!isCollapsed ? (
+        <div style={{ opacity: 0.68, fontSize: 11 }}>
+          每 6 小時更新｜{data.updatedAt || "--:--"}
+          {data.cached ? "｜快取資料" : ""}
+        </div>
+      ) : null}
+    </div>
+    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+      {!isCollapsed ? (
+        <button
+          onClick={() => refreshEpic(dispatch)}
+          disabled={isLoading}
+          style={{
+            cursor: isLoading ? "default" : "pointer",
+            border: "1px solid rgba(255,255,255,0.25)",
+            background: "rgba(255,255,255,0.12)",
+            color: "white",
+            opacity: isLoading ? 0.62 : 1,
+            borderRadius: 8,
+            padding: "4px 8px",
+            fontSize: 11,
+          }}
+        >
+          {isLoading ? "更新中" : "更新"}
+        </button>
+      ) : null}
+      <button
+        onClick={() => toggleCollapsed(isCollapsed, dispatch)}
+        title={isCollapsed ? "展開" : "縮小"}
+        aria-label={isCollapsed ? "展開" : "縮小"}
+        style={{
+          width: 28,
+          height: 28,
+          padding: 0,
+          cursor: "pointer",
+          border: "1px solid rgba(255,255,255,0.25)",
+          background: "rgba(255,255,255,0.12)",
+          color: "white",
+          borderRadius: 8,
+          fontSize: 18,
+          lineHeight: "26px",
+        }}
+      >
+        {isCollapsed ? "+" : "−"}
+      </button>
+    </div>
   </div>
 )
 
@@ -207,16 +258,47 @@ export const updateState = (event, previousState) => {
     }
   }
 
+  if (event.type === "COLLAPSE_TOGGLED") {
+    return { ...previousState, isCollapsed: event.isCollapsed }
+  }
+
   return { ...previousState, output: event.output, error: event.error, isLoading: false }
 }
 
-export const initialState = { output: "", error: null, claimed: {}, isLoading: false }
+export const initialState = {
+  output: "",
+  error: null,
+  claimed: {},
+  isLoading: false,
+  isCollapsed: null,
+}
 
-export const render = ({ output, error, claimed = {}, isLoading }, dispatch) => {
+export const render = (
+  { output, error, claimed = {}, isLoading, isCollapsed },
+  dispatch,
+) => {
+  const collapsed = isCollapsed == null ? loadCollapsed() : isCollapsed
+
+  if (collapsed) {
+    return (
+      <div style={panelStyle(collapsed)}>
+        <Header
+          isCollapsed={collapsed}
+          isLoading={isLoading}
+          dispatch={dispatch}
+        />
+      </div>
+    )
+  }
+
   if (!output && !error) {
     return (
-      <div style={panelStyle}>
-        <Header isLoading={isLoading} dispatch={dispatch} />
+      <div style={panelStyle(collapsed)}>
+        <Header
+          isCollapsed={collapsed}
+          isLoading={isLoading}
+          dispatch={dispatch}
+        />
         <div style={{ marginTop: 10, opacity: 0.62, fontWeight: 750 }}>
           讀取最後一次結果中
         </div>
@@ -233,8 +315,12 @@ export const render = ({ output, error, claimed = {}, isLoading }, dispatch) => 
 
   if (error || data.error) {
     return (
-      <div style={panelStyle}>
-        <Header isLoading={isLoading} dispatch={dispatch} />
+      <div style={panelStyle(collapsed)}>
+        <Header
+          isCollapsed={collapsed}
+          isLoading={isLoading}
+          dispatch={dispatch}
+        />
         <div style={{ marginTop: 10, color: "#ff9da4", fontWeight: 750 }}>
           無法取得 Epic 免費遊戲
         </div>
@@ -249,8 +335,13 @@ export const render = ({ output, error, claimed = {}, isLoading }, dispatch) => 
   const upcoming = data.upcoming || []
 
   return (
-    <div style={panelStyle}>
-      <Header data={data} isLoading={isLoading} dispatch={dispatch} />
+    <div style={panelStyle(collapsed)}>
+      <Header
+        data={data}
+        isCollapsed={collapsed}
+        isLoading={isLoading}
+        dispatch={dispatch}
+      />
       {data.cached ? (
         <div
           title={data.cacheReason || ""}
