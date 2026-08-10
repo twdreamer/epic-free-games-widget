@@ -1,11 +1,204 @@
 import { run } from "uebersicht"
 
-export const refreshFrequency = 1000 * 60 * 60 * 6
+export const refreshFrequency = 1000 * 60 * 60 * 24
 
 const epicCommand = `
 cd "$HOME/Library/Application Support/Übersicht/widgets/epic-free-games.widget" && /usr/bin/python3 epic_games.py
 `
 const collapseKey = "epic-free-games-widget:collapsed"
+const positionKey = "epic-free-games-widget:position"
+const defaultPosition = { x: 0, y: 0 }
+
+let blockHeaderClickUntil = 0
+let activeDragPosition = null
+
+const loadPosition = () => {
+  try {
+    const position = JSON.parse(window.localStorage.getItem(positionKey) || "null")
+    return Number.isFinite(position && position.x) && Number.isFinite(position && position.y)
+      ? position
+      : defaultPosition
+  } catch (error) {
+    return defaultPosition
+  }
+}
+
+const savePosition = (position) =>
+  window.localStorage.setItem(positionKey, JSON.stringify(position))
+
+const widgetRoot = (element) => element && element.closest(".widget")
+
+const applyPosition = (element, position) => {
+  const root = widgetRoot(element)
+  if (!root) return position
+
+  const requestedPosition = activeDragPosition || position || defaultPosition
+  root.style.transform = `translate3d(${requestedPosition.x}px, ${requestedPosition.y}px, 0)`
+
+  if (activeDragPosition) return requestedPosition
+
+  const rect = root.getBoundingClientRect()
+  const correctionX =
+    rect.width >= window.innerWidth
+      ? -rect.left
+      : rect.left < 0
+        ? -rect.left
+        : rect.right > window.innerWidth
+          ? window.innerWidth - rect.right
+          : 0
+  const correctionY =
+    rect.height >= window.innerHeight
+      ? -rect.top
+      : rect.top < 0
+        ? -rect.top
+        : rect.bottom > window.innerHeight
+          ? window.innerHeight - rect.bottom
+          : 0
+
+  if (!correctionX && !correctionY) return requestedPosition
+
+  const fittedPosition = {
+    x: Math.round(requestedPosition.x + correctionX),
+    y: Math.round(requestedPosition.y + correctionY),
+  }
+  root.style.transform = `translate3d(${fittedPosition.x}px, ${fittedPosition.y}px, 0)`
+  savePosition(fittedPosition)
+  return fittedPosition
+}
+
+const startDrag = (event, isPositionUnlocked, position, dispatch) => {
+  if (
+    !isPositionUnlocked ||
+    event.button !== 0 ||
+    event.target.closest("button, a, input, select, textarea")
+  ) {
+    return
+  }
+
+  const dragHandle = event.currentTarget
+  const root = widgetRoot(dragHandle)
+  if (!root) return
+
+  event.preventDefault()
+
+  const startX = event.clientX
+  const startY = event.clientY
+  const startRect = root.getBoundingClientRect()
+  const startPosition = loadPosition()
+  const previousZIndex = root.style.zIndex
+  const previousCursor = dragHandle.style.cursor
+  const previousUserSelect = document.body.style.userSelect
+  let nextPosition = startPosition
+  let didMove = false
+
+  root.style.zIndex = "10000"
+  dragHandle.style.cursor = "grabbing"
+  document.body.style.userSelect = "none"
+  activeDragPosition = startPosition
+
+  const handleMouseMove = (moveEvent) => {
+    const deltaX = moveEvent.clientX - startX
+    const deltaY = moveEvent.clientY - startY
+    const boundedX = Math.min(
+      window.innerWidth - startRect.right,
+      Math.max(-startRect.left, deltaX),
+    )
+    const boundedY = Math.min(
+      window.innerHeight - startRect.bottom,
+      Math.max(-startRect.top, deltaY),
+    )
+
+    didMove = didMove || Math.abs(deltaX) > 2 || Math.abs(deltaY) > 2
+    nextPosition = {
+      x: Math.round(startPosition.x + boundedX),
+      y: Math.round(startPosition.y + boundedY),
+    }
+    activeDragPosition = nextPosition
+    applyPosition(dragHandle, nextPosition)
+  }
+
+  const handleMouseUp = () => {
+    window.removeEventListener("mousemove", handleMouseMove)
+    window.removeEventListener("mouseup", handleMouseUp)
+    window.removeEventListener("blur", handleMouseUp)
+    root.style.zIndex = previousZIndex
+    dragHandle.style.cursor = previousCursor
+    document.body.style.userSelect = previousUserSelect
+
+    if (didMove) {
+      savePosition(nextPosition)
+      blockHeaderClickUntil = Date.now() + 120
+    }
+
+    activeDragPosition = null
+    if (didMove) {
+      dispatch({ type: "POSITION_CHANGED", position: nextPosition })
+    } else {
+      applyPosition(dragHandle, startPosition)
+    }
+  }
+
+  window.addEventListener("mousemove", handleMouseMove)
+  window.addEventListener("mouseup", handleMouseUp)
+  window.addEventListener("blur", handleMouseUp)
+}
+
+const LockIcon = ({ isPositionUnlocked }) => (
+  <svg
+    viewBox="0 0 24 24"
+    width="14"
+    height="14"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <rect x="5" y="10" width="14" height="10" rx="2" />
+    <path
+      d={
+        isPositionUnlocked
+          ? "M8 10V7a4 4 0 0 1 7.5-2"
+          : "M8 10V7a4 4 0 0 1 8 0v3"
+      }
+    />
+  </svg>
+)
+
+const PositionLockButton = ({ isPositionUnlocked, dispatch }) => (
+  <button
+    onClick={(event) => {
+      event.stopPropagation()
+      dispatch({
+        type: "POSITION_LOCK_TOGGLED",
+        isPositionUnlocked: !isPositionUnlocked,
+      })
+    }}
+    title={isPositionUnlocked ? "鎖定位置" : "解除位置鎖定"}
+    aria-label={isPositionUnlocked ? "鎖定位置" : "解除位置鎖定"}
+    aria-pressed={isPositionUnlocked}
+    style={{
+      display: "inline-flex",
+      alignItems: "center",
+      justifyContent: "center",
+      width: 28,
+      height: 28,
+      padding: 0,
+      cursor: "pointer",
+      border: isPositionUnlocked
+        ? "1px solid rgba(126, 210, 255, 0.58)"
+        : "1px solid rgba(255,255,255,0.25)",
+      background: isPositionUnlocked
+        ? "rgba(72, 166, 216, 0.24)"
+        : "rgba(255,255,255,0.12)",
+      color: isPositionUnlocked ? "#9edbff" : "white",
+      borderRadius: 8,
+    }}
+  >
+    <LockIcon isPositionUnlocked={isPositionUnlocked} />
+  </button>
+)
 
 const loadCollapsed = () => window.localStorage.getItem(collapseKey) === "true"
 const saveCollapsed = (isCollapsed) =>
@@ -171,13 +364,31 @@ const Game = ({ game, current, claimed, dispatch }) => (
   </div>
 )
 
-const Header = ({ data = {}, isCollapsed, isLoading, dispatch }) => (
+const Header = ({
+  data = {},
+  isCollapsed,
+  isLoading,
+  isPositionUnlocked,
+  position,
+  dispatch,
+}) => (
   <div
+    ref={(element) => applyPosition(element, position)}
+    onMouseDown={(event) =>
+      startDrag(event, isPositionUnlocked, position, dispatch)
+    }
+    onClickCapture={(event) => {
+      if (Date.now() < blockHeaderClickUntil) {
+        event.preventDefault()
+        event.stopPropagation()
+      }
+    }}
     style={{
       display: "flex",
       justifyContent: isCollapsed ? "flex-start" : "space-between",
       alignItems: "center",
       gap: isCollapsed ? 8 : 0,
+      cursor: isPositionUnlocked ? "grab" : "default",
     }}
   >
     <div
@@ -185,17 +396,24 @@ const Header = ({ data = {}, isCollapsed, isLoading, dispatch }) => (
         isCollapsed ? () => toggleCollapsed(isCollapsed, dispatch) : undefined
       }
       title={isCollapsed ? "展開 Epic Games 免費遊戲" : undefined}
-      style={{ cursor: isCollapsed ? "pointer" : "default" }}
+      style={{
+        cursor: isPositionUnlocked ? "grab" : isCollapsed ? "pointer" : "default",
+      }}
     >
       <div style={{ fontWeight: 850, fontSize: 14 }}>Epic Games 免費遊戲</div>
       {!isCollapsed ? (
         <div style={{ opacity: 0.68, fontSize: 11 }}>
-          每 6 小時更新｜{data.updatedAt || "--:--"}
+          每日更新｜{data.updatedDate ? `${data.updatedDate} ` : ""}
+          {data.updatedAt || "--:--"}
           {data.cached ? "｜快取資料" : ""}
         </div>
       ) : null}
     </div>
     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+      <PositionLockButton
+        isPositionUnlocked={isPositionUnlocked}
+        dispatch={dispatch}
+      />
       {!isCollapsed ? (
         <button
           onClick={() => refreshEpic(dispatch)}
@@ -262,6 +480,17 @@ export const updateState = (event, previousState) => {
     return { ...previousState, isCollapsed: event.isCollapsed }
   }
 
+  if (event.type === "POSITION_LOCK_TOGGLED") {
+    return {
+      ...previousState,
+      isPositionUnlocked: event.isPositionUnlocked,
+    }
+  }
+
+  if (event.type === "POSITION_CHANGED") {
+    return { ...previousState, position: event.position }
+  }
+
   return { ...previousState, output: event.output, error: event.error, isLoading: false }
 }
 
@@ -271,13 +500,23 @@ export const initialState = {
   claimed: {},
   isLoading: false,
   isCollapsed: null,
+  isPositionUnlocked: false,
+  position: null,
 }
 
 export const render = (
-  { output, error, claimed = {}, isLoading, isCollapsed },
+  {
+    output,
+    error,
+    claimed = {},
+    isLoading,
+    isCollapsed,
+    isPositionUnlocked = false,
+  },
   dispatch,
 ) => {
   const collapsed = isCollapsed == null ? loadCollapsed() : isCollapsed
+  const position = loadPosition()
 
   if (collapsed) {
     return (
@@ -285,6 +524,8 @@ export const render = (
         <Header
           isCollapsed={collapsed}
           isLoading={isLoading}
+          isPositionUnlocked={isPositionUnlocked}
+          position={position}
           dispatch={dispatch}
         />
       </div>
@@ -297,6 +538,8 @@ export const render = (
         <Header
           isCollapsed={collapsed}
           isLoading={isLoading}
+          isPositionUnlocked={isPositionUnlocked}
+          position={position}
           dispatch={dispatch}
         />
         <div style={{ marginTop: 10, opacity: 0.62, fontWeight: 750 }}>
@@ -319,6 +562,8 @@ export const render = (
         <Header
           isCollapsed={collapsed}
           isLoading={isLoading}
+          isPositionUnlocked={isPositionUnlocked}
+          position={position}
           dispatch={dispatch}
         />
         <div style={{ marginTop: 10, color: "#ff9da4", fontWeight: 750 }}>
@@ -340,6 +585,8 @@ export const render = (
         data={data}
         isCollapsed={collapsed}
         isLoading={isLoading}
+        isPositionUnlocked={isPositionUnlocked}
+        position={position}
         dispatch={dispatch}
       />
       {data.cached ? (

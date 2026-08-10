@@ -2,7 +2,9 @@
 import json
 import re
 import shutil
+import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from hashlib import sha256
@@ -21,6 +23,10 @@ USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X) EpicFreeGamesWidget/1.0"
 CACHE_PATH = Path(__file__).with_name("epic_games_cache.json")
 IMAGE_CACHE_DIR = Path(__file__).with_name("image_cache")
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+IMAGE_CACHE_WIDTH = 160
+IMAGE_CACHE_QUALITY = 82
+CACHE_RECIPE = f"v2-{IMAGE_CACHE_WIDTH}-jpeg{IMAGE_CACHE_QUALITY}"
+SIPS_PATH = "/usr/bin/sips"
 STEAM_EXTRA_PATTERN = re.compile(
     r"\b(demo|soundtrack|ost|artbook|playtest|beta|dlc)\b|試玩|原聲|美術|設定集",
     re.IGNORECASE,
@@ -212,12 +218,67 @@ def image_url(element):
     return None
 
 
-def image_cache_path(url):
+def legacy_image_cache_path(url):
     suffix = Path(urlparse(url).path).suffix.lower()
     if suffix not in IMAGE_EXTENSIONS:
         suffix = ".jpg"
     digest = sha256(url.encode("utf-8")).hexdigest()[:20]
     return IMAGE_CACHE_DIR / f"{digest}{suffix}"
+
+
+def image_cache_path(url):
+    cache_key = f"{CACHE_RECIPE}:{url}"
+    digest = sha256(cache_key.encode("utf-8")).hexdigest()[:20]
+    return IMAGE_CACHE_DIR / f"{digest}.jpg"
+
+
+def source_image_suffix(url):
+    suffix = Path(urlparse(url).path).suffix.lower()
+    return suffix if suffix in IMAGE_EXTENSIONS else ".jpg"
+
+
+def render_thumbnail(source_path, destination_path):
+    result = subprocess.run(
+        [
+            SIPS_PATH,
+            "--setProperty",
+            "format",
+            "jpeg",
+            "--setProperty",
+            "formatOptions",
+            str(IMAGE_CACHE_QUALITY),
+            "--resampleHeightWidthMax",
+            str(IMAGE_CACHE_WIDTH),
+            str(source_path),
+            "--out",
+            str(destination_path),
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        check=False,
+        timeout=20,
+    )
+    if result.returncode != 0 or not destination_path.exists():
+        message = result.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(message or "無法建立遊戲縮圖")
+
+
+def cache_thumbnail(source_path, destination_path):
+    IMAGE_CACHE_DIR.mkdir(exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".thumbnail-", dir=IMAGE_CACHE_DIR) as temp_dir:
+        temp_path = Path(temp_dir) / "thumbnail.jpg"
+        render_thumbnail(source_path, temp_path)
+        if temp_path.stat().st_size == 0:
+            raise RuntimeError("遊戲縮圖是空檔案")
+        temp_path.replace(destination_path)
+
+
+def download_thumbnail(url, destination_path):
+    IMAGE_CACHE_DIR.mkdir(exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".download-", dir=IMAGE_CACHE_DIR) as temp_dir:
+        source_path = Path(temp_dir) / f"source{source_image_suffix(url)}"
+        source_path.write_bytes(fetch_bytes(url))
+        cache_thumbnail(source_path, destination_path)
 
 
 def local_image_src(path):
@@ -227,12 +288,28 @@ def local_image_src(path):
 
 def normalize_cached_images(payload):
     for game in all_games(payload):
-        image_cache_path = game.get("imageCachePath")
-        if not image_cache_path:
+        cached_path_value = game.get("imageCachePath")
+        if not cached_path_value:
             continue
-        path = Path(image_cache_path)
+        existing_path = Path(cached_path_value)
+        remote_image = game.get("remoteImage")
+        optimized_path = image_cache_path(remote_image) if remote_image else None
+
+        if (
+            optimized_path
+            and not optimized_path.exists()
+            and existing_path.exists()
+            and existing_path.stat().st_size > 0
+        ):
+            try:
+                cache_thumbnail(existing_path, optimized_path)
+            except Exception:
+                pass
+
+        path = optimized_path if optimized_path and optimized_path.exists() else existing_path
         if path.exists() and path.stat().st_size > 0:
             game["image"] = local_image_src(path)
+            game["imageCachePath"] = str(path)
 
 
 def cache_game_image(game):
@@ -241,21 +318,23 @@ def cache_game_image(game):
         return
 
     path = image_cache_path(image)
+    legacy_path = legacy_image_cache_path(image)
     try:
         if not path.exists() or path.stat().st_size == 0:
-            IMAGE_CACHE_DIR.mkdir(exist_ok=True)
-            temp_path = path.with_suffix(path.suffix + ".tmp")
-            temp_path.write_bytes(fetch_bytes(image))
-            temp_path.replace(path)
+            if legacy_path.exists() and legacy_path.stat().st_size > 0:
+                cache_thumbnail(legacy_path, path)
+            else:
+                download_thumbnail(image, path)
 
         game["remoteImage"] = image
         game["image"] = local_image_src(path)
         game["imageCachePath"] = str(path)
     except Exception:
-        if path.exists() and path.stat().st_size > 0:
+        fallback_path = path if path.exists() and path.stat().st_size > 0 else legacy_path
+        if fallback_path.exists() and fallback_path.stat().st_size > 0:
             game["remoteImage"] = image
-            game["image"] = local_image_src(path)
-            game["imageCachePath"] = str(path)
+            game["image"] = local_image_src(fallback_path)
+            game["imageCachePath"] = str(fallback_path)
 
 
 def cache_images(payload):
