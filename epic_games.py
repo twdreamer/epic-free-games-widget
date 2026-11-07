@@ -18,7 +18,7 @@ EPIC_URL = (
     + urlencode({"locale": "zh-TW", "country": "TW", "allowCountries": "TW"})
 )
 STEAM_SEARCH_URL = "https://store.steampowered.com/api/storesearch/"
-STEAM_REVIEWS_URL = "https://store.steampowered.com/appreviews/{appid}"
+STEAM_REVIEWS_URL = "https://api.steampowered.com/IUserReviewsService/GetAppReviews/v1/"
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X) EpicFreeGamesWidget/1.0"
 CACHE_PATH = Path(__file__).with_name("epic_games_cache.json")
 IMAGE_CACHE_DIR = Path(__file__).with_name("image_cache")
@@ -142,6 +142,24 @@ def is_steam_extra(item):
     return item.get("type") != "app" or bool(STEAM_EXTRA_PATTERN.search(name))
 
 
+def steam_review_summary(appid):
+    request_data = {
+        "appid": int(appid),
+        "filter": 0,
+        "languages": ["all"],
+        "day_range": 0,
+        "review_type": 0,
+        "purchase_type": 1,
+        "num_per_page": 1,
+        "display_language": "english",
+    }
+    payload = fetch_json(
+        STEAM_REVIEWS_URL,
+        {"input_json": json.dumps(request_data, separators=(",", ":"))},
+    )
+    return payload.get("response", {}).get("query_summary") or {}
+
+
 def find_steam_game(title):
     fallback = {"url": steam_search_url(title), "rating": None, "reviews": None}
     try:
@@ -168,10 +186,7 @@ def find_steam_game(title):
             best = top
 
         appid = best["id"]
-        reviews = fetch_json(
-            STEAM_REVIEWS_URL.format(appid=appid),
-            {"json": 1, "language": "all", "purchase_type": "all", "filter": "summary"},
-        ).get("query_summary", {})
+        reviews = steam_review_summary(appid)
         total = reviews.get("total_reviews", 0)
         positive = reviews.get("total_positive", 0)
         rating = round(positive * 100 / total) if total else None
@@ -180,7 +195,8 @@ def find_steam_game(title):
             "rating": rating,
             "reviews": total or None,
         }
-    except Exception:
+    except Exception as error:
+        fallback["error"] = f"{type(error).__name__}: {error}"
         return fallback
 
 
